@@ -136,6 +136,9 @@ def collect(ticker: Any, raw_previous: dict | None = None, max_workers: int = 6)
     t0 = time.time()
     out: dict[str, Any] = {}
     raw_previous = raw_previous or {}
+    from lib.event_integrity import sanitize_hk_events
+    if sanitize_hk_events(raw_previous):
+        raw_previous.get("dimensions", {}).pop("15_events", None)
 
     # Wave 1 · 0_basic 必须先跑
     basic_fetcher = get_fetcher("0_basic")

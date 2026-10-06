@@ -49,6 +49,8 @@ def _f(v, default=0.0):
 
 
 def score_dimensions(raw: dict) -> dict:
+    from lib.event_integrity import sanitize_hk_events
+    sanitize_hk_events(raw)
     dims = raw.get("dimensions", {})
     out = {}
 
@@ -330,6 +332,9 @@ def generate_panel(dims_scored: dict, raw: dict) -> dict:
     """Rule-engine-based panel — each investor's verdict cites specific
     criteria from investor_criteria.py that were hit or missed.
     """
+    from lib.event_integrity import sanitize_hk_events
+    if sanitize_hk_events(raw):
+        dims_scored.update(score_dimensions(raw))
     # Build the flat feature dict once for all 51 investors
     features = extract_features(raw, raw.get("dimensions", {}))
 

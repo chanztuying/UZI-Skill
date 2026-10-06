@@ -89,6 +89,9 @@ def extract_features(raw: dict, dims: dict) -> dict:
     Every feature has a STABLE key name. Never rename without updating
     investor_criteria.py.
     """
+    from lib.event_integrity import sanitize_hk_events
+    if raw:
+        sanitize_hk_events(raw)
     f: dict[str, Any] = {}
     dim_data = raw.get("dimensions", {}) if raw else {}
 
