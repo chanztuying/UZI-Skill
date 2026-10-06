@@ -20,6 +20,8 @@ rrt.py 仍 re-export 这些函数 (from lib.pipeline.score_fns import *)· 所�
 """
 from __future__ import annotations
 
+from lib.panel_status import summarize_abstentions
+
 import json
 import os
 import sys
@@ -231,16 +233,20 @@ def score_dimensions(raw: dict) -> dict:
     out["15_events"] = {"score": score_15, "weight": 4,
                         "label": f"近期新闻 {len(news)} 条 · 公告 {len(notices)} 份"}
 
-    # 16 · 龙虎榜
+    # 16 · 龙虎榜：unknown/not-applicable cannot become a zero-count signal.
     lhb = _get("16_lhb")
-    lhb_count = lhb.get("lhb_count_30d", 0)
+    lhb_count = lhb.get("lhb_count_30d")
     matched = lhb.get("matched_youzi") or []
-    score_16 = 5 + min(3, lhb_count // 2)
-    if matched: score_16 += 1
-    score_16 = min(10, score_16)
-    out["16_lhb"] = {"score": score_16, "weight": 4,
-                     "label": f"近 30 天上榜 {lhb_count} 次 · 识别游资 {len(matched)} 位",
-                     "reasons_pass": [f"{'/'.join(matched[:3])} 席位出现"] if matched else []}
+    if lhb.get("verified") is not True or lhb_count is None:
+        out["16_lhb"] = {"score": 5, "weight": 0,
+                         "label": "市场不适用" if lhb.get("status") == "not_applicable" else "龙虎榜证据未核验",
+                         "reasons_pass": [], "data_status": lhb.get("status", "unverified")}
+    else:
+        score_16 = min(10, 5 + min(3, lhb_count // 2) + bool(matched))
+        out["16_lhb"] = {"score": score_16, "weight": 4,
+                         "label": f"近 30 天上榜 {lhb_count} 次 · 识别游资 {len(matched)} 位",
+                         "reasons_pass": [f"{'/'.join(matched[:3])} 席位出现"] if matched else [],
+                         "data_status": lhb.get("status")}
 
     # 17 · 舆情
     hot = _get("17_sentiment")
@@ -413,6 +419,8 @@ def generate_panel(dims_scored: dict, raw: dict) -> dict:
             "reasoning": reasoning,
             "comment": comment,
             "headline": headline,
+            "abstention_category": verdict_obj.get("abstention_category"),
+            "skip_reason": verdict_obj.get("skip_reason"),
             "pass": [{"name": r["name"], "msg": r["msg"], "weight": r["weight"]}
                      for r in verdict_obj["pass_rules"][:4]],
             "fail": [{"name": r["name"], "msg": r["msg"], "weight": r["weight"]}
@@ -586,6 +594,7 @@ def generate_panel(dims_scored: dict, raw: dict) -> dict:
         ),
         "vote_distribution": vote_dist,
         "signal_distribution": sig_dist,
+        "abstention_distribution": summarize_abstentions(investors_out),
         "investors": investors_out,
         # v2.15.4 · 按流派分数 · 7 个 school 各自 consensus/avg_score/verdict
         "school_scores": school_scores,

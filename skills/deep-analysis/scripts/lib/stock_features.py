@@ -356,12 +356,14 @@ def extract_features(raw: dict, dims: dict) -> dict:
     f["has_negative_catalyst"] = any(kw in text for kw in ["亏损", "下修", "处罚", "诉讼", "风险"])
 
     # ─────────────── LHB ───────────────
-    f["lhb_30d_count"] = _f(lhb.get("lhb_count_30d"))
-    f["matched_youzi"] = lhb.get("matched_youzi") or []
-    f["matched_youzi_count"] = len(f["matched_youzi"])
-    inst_vs = lhb.get("inst_vs_youzi") or {}
-    f["inst_net_buy_lhb"] = _f(inst_vs.get("institutional_net"))
-    f["youzi_net_buy_lhb"] = _f(inst_vs.get("youzi_net"))
+    lhb_usable = lhb.get("verified") is True
+    f["lhb_verified"] = lhb_usable
+    f["lhb_30d_count"] = _f(lhb.get("lhb_count_30d")) if lhb_usable else None
+    f["matched_youzi"] = (lhb.get("matched_youzi") or []) if lhb_usable else []
+    f["matched_youzi_count"] = len(f["matched_youzi"]) if lhb_usable else None
+    inst_vs = (lhb.get("inst_vs_youzi") or {}) if lhb_usable else {}
+    f["inst_net_buy_lhb"] = _f(inst_vs.get("institutional_net"), None)
+    f["youzi_net_buy_lhb"] = _f(inst_vs.get("youzi_net"), None)
 
     # ─────────────── SENTIMENT ───────────────
     f["sentiment_heat"] = _f(sentiment.get("thermometer_value"))
