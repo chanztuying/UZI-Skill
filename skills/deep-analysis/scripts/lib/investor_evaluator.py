@@ -20,6 +20,7 @@ Output schema:
 from __future__ import annotations
 
 from lib.investor_db import by_id
+from lib.panel_evidence import model_gap
 
 import os
 from typing import Any
@@ -174,7 +175,7 @@ def evaluate(investor_id: str, features: dict) -> dict:
         if inv_group != locked:
             return _skip_result(
                 investor_id,
-                f"用户锁定 {SCHOOL_LABELS.get(locked, locked)} 派视角 · 非该派评委不参与",
+                f"用户锁定 {SCHOOL_LABELS.get(locked, locked)} 派视角 · 非该派评委不参与", "school_locked",
             )
 
     # ─── Layer 1: Reality Check ───
@@ -187,7 +188,13 @@ def evaluate(investor_id: str, features: dict) -> dict:
 
     # If this investor wouldn't look at this market at all → "不适合"
     if not rc["should_evaluate"]:
-        return _skip_result(investor_id, rc["skip_reason"] or "不在能力圈")
+        return _skip_result(investor_id, rc["skip_reason"] or "不在能力圈", "market_not_applicable")
+
+    gap = model_gap(investor_id)
+    if gap:
+        result = _skip_result(investor_id, gap["skip_reason"])
+        result.update(gap)
+        return result
 
     # v2.13.3 · F 组游资射程前置检查 · 大市值超射程直接 skip 不打分
     out_of_range, range_reason = _is_youzi_out_of_range(investor_id, features)
@@ -337,7 +344,7 @@ def _build_rationale(signal: str, pass_list: list, fail_list: list) -> str:
     return "\n".join(lines) if lines else "无有效规则命中"
 
 
-def _skip_result(investor_id: str, reason: str) -> dict:
+def _skip_result(investor_id: str, reason: str, category: str = "unspecified") -> dict:
     """This investor would not evaluate this stock (market/scope mismatch)."""
     profile = _get_profile(investor_id, group=_INVESTOR_GROUP_MAP.get(investor_id, ""))
     return {
@@ -354,6 +361,7 @@ def _skip_result(investor_id: str, reason: str) -> dict:
         "headline": f"不适合 — {reason}",
         "rationale": f"该投资者{reason}，不对此股票发表意见。",
         "skip_reason": reason,
+        "abstention_category": category,
         "time_horizon": profile["time_horizon"],
         "position_sizing": profile["position_sizing"],
         "what_would_change_my_mind": profile["what_would_change_my_mind"],

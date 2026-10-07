@@ -37,7 +37,7 @@ def render_jury_seat(inv: dict) -> str:
     inv = escape_payload(inv)
     sig = inv.get("signal", "neutral")
     name = (inv.get("name") or "")[:4]
-    score = inv.get("score", 0)
+    score = "—" if inv.get("signal") == "skip" else inv.get("score", 0)
     inv_id = safe_asset_id(inv.get("investor_id"))
     return f'''<div class="seat {sig}" data-group="{inv.get("group", "")}" data-target="msg-{inv_id}" title="{inv.get("name", "")} · {inv.get("verdict", "")} · 点击查看完整结论">
   <img src="avatars/{inv_id}.svg" class="seat-avatar" alt="">
@@ -65,11 +65,13 @@ def render_chat_message(inv: dict) -> str:
     sig = inv.get("signal", "neutral")
     group = inv.get("group", "")
     group_label = GROUP_LABELS.get(group, group)
-    score = inv.get("score", 0)
+    score = "—" if inv.get("signal") == "skip" else inv.get("score", 0)
     confidence = inv.get("confidence", 0)
     reasoning = _safe(inv.get("reasoning") or inv.get("comment"), "—")
     comment = _safe(inv.get("comment"), "")
     verdict = _safe(inv.get("verdict"), "—")
+    if sig == "skip" and inv.get("skip_reason"):
+        reasoning = _safe(inv["skip_reason"], "—")
     pass_items = inv.get("pass") or []
     fail_items = inv.get("fail") or []
     ideal_price = inv.get("ideal_price")

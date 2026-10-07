@@ -20,6 +20,9 @@ rrt.py 仍 re-export 这些函数 (from lib.pipeline.score_fns import *)· 所�
 """
 from __future__ import annotations
 
+from collections import Counter
+from lib.panel_evidence import merge_investor_overrides, normalize_abstention
+
 import json
 import os
 import sys
@@ -338,8 +341,6 @@ def generate_panel(dims_scored: dict, raw: dict) -> dict:
     fin_ctx = (raw.get("dimensions", {}).get("1_financials") or {}).get("data") or {}
 
     investors_out = []
-    vote_dist = {"strongly_buy": 0, "buy": 0, "watch": 0, "wait": 0, "avoid": 0, "n_a": 0, "skip": 0}
-    sig_dist = {"bullish": 0, "neutral": 0, "bearish": 0, "skip": 0}
 
     def _score_to_verdict(score: float, signal: str) -> str:
         if signal == "bullish" and score >= 80:
@@ -394,12 +395,6 @@ def generate_panel(dims_scored: dict, raw: dict) -> dict:
             comment = f"{persona_line}\n{headline}"
             reasoning = verdict_obj["rationale"]
 
-        v_key = {"强烈买入": "strongly_buy", "买入": "buy", "关注": "watch",
-                 "观望": "wait", "回避": "avoid", "不适合": "skip"}.get(verdict, "n_a")
-        if mandate != "short":
-            vote_dist[v_key] = vote_dist.get(v_key, 0) + 1
-            sig_dist[sig] = sig_dist.get(sig, 0) + 1
-
         investors_out.append({
             "investor_id": inv_id,
             "name": inv["name"],
@@ -413,6 +408,9 @@ def generate_panel(dims_scored: dict, raw: dict) -> dict:
             "reasoning": reasoning,
             "comment": comment,
             "headline": headline,
+            "abstention_category": verdict_obj.get("abstention_category"),
+            "skip_reason": verdict_obj.get("skip_reason"),
+            "required_evidence": verdict_obj.get("required_evidence", []),
             "pass": [{"name": r["name"], "msg": r["msg"], "weight": r["weight"]}
                      for r in verdict_obj["pass_rules"][:4]],
             "fail": [{"name": r["name"], "msg": r["msg"], "weight": r["weight"]}
@@ -426,6 +424,26 @@ def generate_panel(dims_scored: dict, raw: dict) -> dict:
             "position_sizing": verdict_obj.get("position_sizing", "—"),
             "what_would_change_my_mind": verdict_obj.get("what_would_change_my_mind", "—"),
         })
+
+    for investor in investors_out:
+        normalize_abstention(investor)
+    return _summarize_panel(investors_out, raw["ticker"])
+
+
+def _summarize_panel(investors_out, ticker):
+    """Recompute every derived panel statistic after scoring or review overrides."""
+    sig_dist = {key: 0 for key in ("bullish", "neutral", "bearish", "skip")}
+    vote_dist = {key: 0 for key in ("strongly_buy", "buy", "watch", "wait", "avoid", "n_a", "skip")}
+    for investor in investors_out:
+        if investor.get("mandate") == "short":
+            continue
+        signal = investor.get("signal", "skip")
+        sig_dist[signal] += 1
+        key = "skip" if signal == "skip" else {
+            "强烈买入": "strongly_buy", "买入": "buy", "关注": "watch",
+            "观望": "wait", "回避": "avoid",
+        }.get(investor.get("verdict"), "n_a")
+        vote_dist[key] += 1
 
     # v2.15.5 · 混合 consensus 公式（连续分 + 离散票）
     # 动机：v2.11 单一公式 `(bullish + 0.6*neutral)/active*100` 只看 signal 计数 ·
@@ -573,7 +591,7 @@ def generate_panel(dims_scored: dict, raw: dict) -> dict:
     consensus_valid = hollow_pct < 20
 
     return {
-        "ticker": raw["ticker"],
+        "ticker": ticker,
         "panel_consensus": round(consensus, 1),
         "consensus_valid": consensus_valid,
         "hollow_verdicts": len(hollow_ids),
@@ -586,6 +604,7 @@ def generate_panel(dims_scored: dict, raw: dict) -> dict:
         ),
         "vote_distribution": vote_dist,
         "signal_distribution": sig_dist,
+        "abstention_distribution": dict(Counter(m.get("abstention_category") or "unspecified" for m in investors_out if m.get("signal") == "skip")),
         "investors": investors_out,
         # v2.15.4 · 按流派分数 · 7 个 school 各自 consensus/avg_score/verdict
         "school_scores": school_scores,
@@ -986,23 +1005,10 @@ def generate_synthesis(raw: dict, dims_scored: dict, panel: dict, agent_analysis
     from compute_friendly import compute_scenarios, compute_exit_triggers
     ag = agent_analysis or {}
 
-    # v3.9.4 · per_investor_override 合并 —— 让 agent 的 role-play 成果真正生效
-    # （此前 agent 写进 agent_analysis.json 的 per_investor_override 是死字段，
-    #   规则引擎生成的评委判决永远覆盖不过去）
-    _pio = ag.get("per_investor_override") or {}
-    if isinstance(_pio, dict) and _pio:
-        _inv_list = panel.get("investors") or []
-        _by_id = {i.get("investor_id"): i for i in _inv_list}
-        for _id, _ov in _pio.items():
-            _inv = _by_id.get(_id)
-            if not isinstance(_inv, dict):
-                continue
-            for _fld in ("signal", "score", "headline", "reasoning", "comment", "verdict"):
-                if _fld in _ov and _ov[_fld] is not None:
-                    _inv[_fld] = _ov[_fld]
-            # comment 未显式给出时用 headline（保持展示层有内容）
-            if not _inv.get("comment") and _inv.get("headline"):
-                _inv["comment"] = _inv["headline"]
+    investors = panel.get("investors") or []
+    merge_investor_overrides(investors, ag.get("per_investor_override"))
+    if investors:
+        panel.update(_summarize_panel(investors, raw.get("ticker", panel.get("ticker"))))
 
     basic = (raw.get("dimensions", {}).get("0_basic") or {}).get("data") or {}
     name = basic.get("name") or raw.get("ticker")
@@ -1113,11 +1119,11 @@ def generate_synthesis(raw: dict, dims_scored: dict, panel: dict, agent_analysis
         and i.get("score", 0) > 0  # 0 分通常是 fail_msg 幻觉，剔除
     ]
     if not eligible:
-        eligible = [i for i in investors if i.get("signal") != "skip"] or investors
+        eligible = [i for i in investors if i.get("signal") != "skip"]
 
     inv_by_score = sorted(eligible, key=lambda x: -x.get("score", 0))
-    bull = inv_by_score[0] if inv_by_score else (investors[0] if investors else {})
-    bear = inv_by_score[-1] if inv_by_score else (investors[-1] if investors else {})
+    bull = inv_by_score[0] if inv_by_score else {}
+    bear = inv_by_score[-1] if inv_by_score else {}
 
     # Safety: bull and bear must be different investors
     if bull.get("investor_id") == bear.get("investor_id") and len(inv_by_score) > 1:
@@ -1167,6 +1173,9 @@ def generate_synthesis(raw: dict, dims_scored: dict, panel: dict, agent_analysis
             "bear_say": agent_bear_rounds[2] if len(agent_bear_rounds) > 2 else f"综合看，{bear.get('score', 0)} 分，风险大于收益。",
         },
     ]
+
+    if not eligible:
+        rounds = []  # No directional debate when every judge abstains.
 
     kline = (raw.get("dimensions", {}).get("2_kline") or {}).get("data") or {}
     val = (raw.get("dimensions", {}).get("10_valuation") or {}).get("data") or {}
@@ -1351,18 +1360,18 @@ def generate_synthesis(raw: dict, dims_scored: dict, panel: dict, agent_analysis
                 "buy_zones.*.rationale", "risks[*]"],
         },
         "debate": {
-            "bull": {"investor_id": bull["investor_id"], "name": bull["name"], "group": bull["group"]},
-            "bear": {"investor_id": bear["investor_id"], "name": bear["name"], "group": bear["group"]},
+            "bull": {"investor_id": bull.get("investor_id"), "name": bull.get("name"), "group": bull.get("group")} if bull else {},
+            "bear": {"investor_id": bear.get("investor_id"), "name": bear.get("name"), "group": bear.get("group")} if bear else {},
             "rounds": rounds,
             "punchline": punchline,
         },
         "great_divide": {
-            "bull_avatar": bull["investor_id"],
-            "bear_avatar": bear["investor_id"],
-            "bull_score": bull["score"],
-            "bear_score": bear["score"],
-            "bull_signal": bull["signal"],
-            "bear_signal": bear["signal"],
+            "bull_avatar": bull.get("investor_id"),
+            "bear_avatar": bear.get("investor_id"),
+            "bull_score": bull.get("score"),
+            "bear_score": bear.get("score"),
+            "bull_signal": bull.get("signal"),
+            "bear_signal": bear.get("signal"),
             "punchline": punchline,
         },
         "risks": risks,

@@ -822,6 +822,8 @@ def stage2(ticker: str) -> str:
 
     print(f"\n⚖ Task 4 · 综合研判")
     syn = generate_synthesis(raw, dims, panel, agent_analysis=agent_analysis)
+    # assemble() reloads panel.json; persist merged votes and evidence before rendering.
+    write_task_output(ti.full, "panel", panel)
 
     # v2.3 · 合并 _data_gaps.json 进 synthesis，让报告组装环节能渲染橙色徽章/banner。
     # agent 若在 agent_analysis.json 里显式 ack 了某个 gap，标 resolved=false + note；
